@@ -4,7 +4,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
-
+from openai import OpenAI
 import argparse
 import shutil
 from langchain_community.document_loaders import PyPDFDirectoryLoader
@@ -12,67 +12,77 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_community.embeddings import OpenAIEmbeddings
 
-# Ensure the OpenAI API key is set
-my_secret = st.secrets['OPENAI_API_KEY']
-#os.environ["OPENAI_API_KEY"] = my_secret
+client = OpenAI(
+    api_key = os.environ['OPENAI_API_KEY']
+)
 
-#set the app title
+my_secret = st.secrets['OPENAI_API_KEY']
+client = OpenAI(api_key=my_secret)
+
 st.title('PseudoScience app')
 
-st.write('Welcome to PseudoScience app. Ask me anything!')  # Initial text
+st.write('Welcome to PseudoScience app. Ask me anything!')  
 
-# User inputs the question
 question = st.text_input("Enter your questions:")
 
+CHROMA_PATH = "chroma"
+
+
+PROMPT_TEMPLATE = """
+Answer the question based only on the following context:
+
+{context}
+
+---
+
+Answer the question based on the above context: {question}
+"""
+
 if st.button("Enter"):
-    CHROMA_PATH = "chroma"
-    PROMPT_TEMPLATE = """
-    Answer the question based only on the following context:
+  def main(query_text=question):
+    # Prepare the DB.
+    embedding_function = OpenAIEmbeddings(
+        api_key=os.environ['OPENAI_API_KEY'])
+    db = Chroma(persist_directory=CHROMA_PATH,
+                embedding_function=embedding_function)
 
-    {context}
+    # Search the DB.
+    results = db.similarity_search_with_relevance_scores(query_text, k=3)
+    if len(results) == 0 or results[0][1] < 0.7:
+        st.write("Unable to find matching results.")
+        return
 
-    ---
+    context_text = "\n\n---\n\n".join(
+        [doc.page_content for doc, _score in results])
+    prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+    prompt = prompt_template.format(context=context_text,
+                                    question=query_text)
 
-    Answer the question based on the above context: {question}
-    """
+    # Generate a response
+    # Make the chat completion request
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+    )
 
-    def main(query_text=question):
-        # Prepare the DB.
-        embedding_function = OpenAIEmbeddings(
-            api_key=os.environ['OPENAI_API_KEY'])
-        db = Chroma(persist_directory=CHROMA_PATH,
-                    embedding_function=embedding_function)
+    # Get sources if applicable (replace `results` with your actual data)
+    sources = [doc.metadata.get("source", None) for doc, _score in results]
 
-        # Search the DB.
-        results = db.similarity_search_with_relevance_scores(query_text, k=3)
-        if len(results) == 0 or results[0][1] < 0.7:
-            st.write("Unable to find matching results.")
-            return
-
-        context_text = "\n\n---\n\n".join(
-            [doc.page_content for doc, _score in results])
-        prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-        prompt = prompt_template.format(context=context_text,
-                                        question=query_text)
-
-        # Generate a response
-        model = ChatOpenAI(api_key=os.environ['OPENAI_API_KEY'])
-        response_text = model.predict(prompt)
-
-        sources = [doc.metadata.get("source", None) for doc, _score in results]
-        formatted_response = f"Response: {response_text}\nSources: {sources}"
-        st.write(formatted_response)
-
-    # Run the main function
-    main()
-
+    # Format the response
+    formatted_response = (
+        f"Response: {response.choices[0].message.content}\n"
+        f"Sources: {sources}"
+    )
+    print(formatted_response)
 
 #get document
 def get_embedding_function():
     return OpenAIEmbeddings(api_key=os.environ['OPENAI_API_KEY'])
 
 
-CHROMA_PATH = "chroma"
 DATA_PATH = "data"
 
 
